@@ -3,10 +3,11 @@ package norhan;
 // click the <icon src="AllIcons.Actions.Execute"/> icon in the gutter.
 
 
-
+import java.util.HashSet;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.DataStreamSink;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
@@ -22,8 +23,8 @@ import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 
-
-
+import java.util.HashSet;
+import java.util.Set;
 
 
 public class SessionDurationCalculator {
@@ -71,24 +72,38 @@ public class SessionDurationCalculator {
                 .withTimestampAssigner((event, ts) -> Instant.parse(event.f1).toEpochMilli()));
 
         // Calculate session duration
-        inputStream
+        DataStreamSink<Object> print = inputStream
                 .keyBy(e -> e.f0)
                 .window(TumblingEventTimeWindows.of(Time.seconds(30)))
                 .process(new ProcessWindowFunction<Tuple2<String, String>, Object, String, TimeWindow>() {
+
+
+                    Set<String> distinctIPs = new HashSet<String>(); // Specify String as the type parameter
+
                     @Override
                     public void process(String key, ProcessWindowFunction<Tuple2<String, String>, Object, String, TimeWindow>.Context context,
                                         Iterable<Tuple2<String, String>> iterable, Collector<Object> collector) throws Exception {
-                        long st_w = context.window().getStart();
-                        long en_w = context.window().getEnd();
 
-                        // Calculate session duration
-                        long sessionDuration = en_w - st_w;
+                           if (!distinctIPs.contains(key)) {
+                            long sess_st = Long.MAX_VALUE;
+                            long sess_end = Long.MIN_VALUE;
 
-                        // Emit result
-                        String result = "IP: " + key + ", Session Start: " + Instant.ofEpochMilli(st_w) +
-                                ", Session End: " + Instant.ofEpochMilli(en_w) + ", Session Duration: " + sessionDuration + " milliseconds";
+                            for (Tuple2<String, String> element : iterable) {
+                                long timestamp = Instant.parse(element.f1).toEpochMilli();
+                                sess_st = Math.min(sess_st, timestamp);
+                                sess_end = Math.max(sess_end, timestamp);
+                            }
 
-                        collector.collect(result);
+                            long Sess_dur = sess_end - sess_st;
+
+                            String result = "IP: " + key + ", Start: " + Instant.ofEpochMilli(sess_st) +
+                                    ", End: " + Instant.ofEpochMilli(sess_end) + ", Duration: " + Sess_dur + " milliseconds";
+
+                            collector.collect(result);
+
+                            // Add the IP to the set of distinct IPs
+                            distinctIPs.add(key);
+                        }
                     }
                 }).print();
 
